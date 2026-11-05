@@ -1,0 +1,91 @@
+{
+  "title": "ML Platform — Exchange Rate Forecaster",
+  "uid": "ml-platform-main",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Prediction Requests / min",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(prediction_requests_total[1m])",
+          "legendFormat": "{{pair}} - {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Prediction Latency p95 (ms)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, rate(prediction_latency_seconds_bucket[5m])) * 1000",
+          "legendFormat": "p95 {{pair}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Model Loaded",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 8, "w": 4, "h": 4 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "model_loaded"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "NOT LOADED", "color": "red" }, "1": { "text": "READY", "color": "green" } } }
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Error Rate",
+      "type": "stat",
+      "gridPos": { "x": 4, "y": 8, "w": 4, "h": 4 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(prediction_requests_total{status='error'}[5m]) / rate(prediction_requests_total[5m]) * 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Application Logs",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 10 },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{service=~\"ml_serving|ml_trainer|ml_mlflow\"}"
+        }
+      ]
+    }
+  ]
+}

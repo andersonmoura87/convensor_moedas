@@ -1,0 +1,133 @@
+# Core platform services: MLflow, training, serving, and reverse proxy.
+# Monitoring stack lives in docker-compose.monitoring.yml.
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  ml-net:
+    driver: bridge
+    name: ml-net
+
+volumes:
+  mlflow-data:
+  mlflow-artifacts:
+  postgres-data:
+
+services:
+  # ── Postgres: MLflow backend store ─────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: ml_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mlflow
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow_secret}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - ml-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  # ── MLflow tracking server ──────────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.19.0
+    container_name: ml_mlflow
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://mlflow:${POSTGRES_PASSWORD:-mlflow_secret}@postgres:5432/mlflow
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+    volumes:
+      - mlflow-artifacts:/mlflow/artifacts
+    networks:
+      - ml-net
+    command: >-
+      bash -c "pip install psycopg2-binary -q && mlflow server --backend-store-uri postgresql://mlflow:${POSTGRES_PASSWORD:-mlflow_secret}@postgres:5432/mlflow --default-artifact-root /mlflow/artifacts --host 0.0.0.0 --port 5000 --workers 2"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s
+    logging: *default-logging
+
+  # ── Training job (runs once, exits) ────────────────────────────────────────
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile.training
+    container_name: ml_trainer
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      PAIR: ${PAIR:-USD/BRL}
+      EPOCHS: ${EPOCHS:-50}
+    volumes:
+      - ./data:/app/data
+      - mlflow-artifacts:/app/mlflow/artifacts
+    networks:
+      - ml-net
+    restart: "no"
+    command: >
+      python -m src.training.train
+        --pair ${PAIR:-USD/BRL}
+        --epochs ${EPOCHS:-50}
+    logging: *default-logging
+
+  # ── Inference API ───────────────────────────────────────────────────────────
+  serving:
+    build:
+      context: .
+      dockerfile: Dockerfile.serving
+    container_name: ml_serving
+    restart: unless-stopped
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - mlflow-artifacts:/app/mlflow/artifacts
+    networks:
+      - ml-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+
+  # ── Nginx reverse proxy ─────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: ml_nginx
+    restart: unless-stopped
+    depends_on:
+      mlflow:
+        condition: service_started
+      serving:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infra/nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - ml-net
+    logging: *default-logging

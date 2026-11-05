@@ -1,0 +1,15 @@
+# Hyperparameters tracked and versioned by DVC.
+# Changes here trigger a new DVC stage run.
+
+pair: USD/BRL
+seq_len: 30
+epochs: 50
+lr: 0.001
+weight_decay: 0.00001
+hidden_size: 128
+num_layers: 2
+dropout: 0.2
+fc_hidden: 64
+batch_size: 64
+patience: 10
+grad_clip: 1.0

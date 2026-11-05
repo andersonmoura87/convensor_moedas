@@ -1,0 +1,83 @@
+# Observability stack: Prometheus, Grafana, Loki, Promtail.
+# Extend the core stack: docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up
+
+networks:
+  ml-net:
+    external: true
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+
+services:
+  # ── Prometheus ──────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: ml_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+    user: "0"
+    networks:
+      - ml-net
+    ports:
+      - "9090:9090"
+
+  # ── Grafana ─────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: ml_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-grafana_secret}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_FEATURE_TOGGLES_ENABLE: "publicDashboards"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - ml-net
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+
+  # ── Loki (log aggregation) ──────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:2.9.7
+    container_name: ml_loki
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - ml-net
+    ports:
+      - "3100:3100"
+
+  # ── Promtail (log shipper) ──────────────────────────────────────────────────
+  promtail:
+    image: grafana/promtail:2.9.7
+    container_name: ml_promtail
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - ml-net
+    depends_on:
+      - loki

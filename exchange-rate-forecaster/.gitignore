@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Type checking
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Data (tracked by DVC)
+data/raw/*.csv
+data/processed/*.pkl
+data/processed/*.parquet
+
+# MLflow local artefacts (use remote store in production)
+mlflow/artifacts/
+mlruns/
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Docker
+*.tar
+
+# OS
+.DS_Store
+Thumbs.db

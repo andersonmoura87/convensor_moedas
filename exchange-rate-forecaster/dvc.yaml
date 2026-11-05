@@ -1,0 +1,44 @@
+stages:
+  # Stage 1: fetch raw data from Frankfurter API
+  fetch:
+    cmd: python -m src.ingestion.fetch_rates --output rates_raw.csv
+    deps:
+      - src/ingestion/fetch_rates.py
+    outs:
+      - data/raw/rates_raw.csv
+
+  # Stage 2: feature engineering (generates processed artefacts used by train)
+  features:
+    cmd: python -c "
+      from src.features.engineering import run;
+      import json, pickle, pathlib;
+      result = run('data/raw/rates_raw.csv', pair='USD/BRL');
+      pathlib.Path('data/processed').mkdir(parents=True, exist_ok=True);
+      pickle.dump(result, open('data/processed/features_USD_BRL.pkl', 'wb'));
+      print('Features saved')
+      "
+    deps:
+      - src/features/engineering.py
+      - data/raw/rates_raw.csv
+    outs:
+      - data/processed/features_USD_BRL.pkl
+
+  # Stage 3: train the LSTM and register in MLflow
+  train:
+    cmd: python -m src.training.train --pair USD/BRL --epochs ${epochs}
+    params:
+      - params.yaml:
+          - epochs
+          - hidden_size
+          - num_layers
+          - dropout
+          - seq_len
+          - lr
+    deps:
+      - src/training/train.py
+      - src/training/model.py
+      - src/training/dataset.py
+      - data/raw/rates_raw.csv
+    metrics:
+      - metrics.json:
+          cache: false
