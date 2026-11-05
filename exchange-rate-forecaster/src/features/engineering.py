@@ -11,7 +11,9 @@ Transforms raw rate data into model-ready features:
 
 from __future__ import annotations
 
+import argparse
 import logging
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -57,18 +59,24 @@ def add_rolling_features(
     df = df.copy()
     grouped = df.groupby(["base", "target"])["rate"]
     for w in windows:
-        df[f"rate_roll_mean_{w}"] = grouped.transform(lambda x: x.rolling(w, min_periods=1).mean())
-        df[f"rate_roll_std_{w}"] = grouped.transform(lambda x: x.rolling(w, min_periods=1).std())
-        df[f"rate_roll_min_{w}"] = grouped.transform(lambda x: x.rolling(w, min_periods=1).min())
-        df[f"rate_roll_max_{w}"] = grouped.transform(lambda x: x.rolling(w, min_periods=1).max())
+        df[f"rate_roll_mean_{w}"] = grouped.transform(
+            lambda x, window=w: x.rolling(window, min_periods=1).mean()
+        )
+        df[f"rate_roll_std_{w}"] = grouped.transform(
+            lambda x, window=w: x.rolling(window, min_periods=1).std()
+        )
+        df[f"rate_roll_min_{w}"] = grouped.transform(
+            lambda x, window=w: x.rolling(window, min_periods=1).min()
+        )
+        df[f"rate_roll_max_{w}"] = grouped.transform(
+            lambda x, window=w: x.rolling(window, min_periods=1).max()
+        )
     return df
 
 
 def add_log_return(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["log_return"] = df.groupby(["base", "target"])["rate"].transform(
-        lambda x: np.log(x).diff()
-    )
+    df["log_return"] = df.groupby(["base", "target"])["rate"].transform(lambda x: np.log(x).diff())
     return df
 
 
@@ -99,12 +107,30 @@ def train_test_split_temporal(
 
 
 FEATURE_COLS = [
-    "day_of_week", "month", "quarter", "is_month_end", "year",
-    "rate_lag_1", "rate_lag_2", "rate_lag_3", "rate_lag_5",
-    "rate_lag_7", "rate_lag_14", "rate_lag_21",
-    "rate_roll_mean_7", "rate_roll_std_7", "rate_roll_min_7", "rate_roll_max_7",
-    "rate_roll_mean_14", "rate_roll_std_14", "rate_roll_min_14", "rate_roll_max_14",
-    "rate_roll_mean_30", "rate_roll_std_30", "rate_roll_min_30", "rate_roll_max_30",
+    "day_of_week",
+    "month",
+    "quarter",
+    "is_month_end",
+    "year",
+    "rate_lag_1",
+    "rate_lag_2",
+    "rate_lag_3",
+    "rate_lag_5",
+    "rate_lag_7",
+    "rate_lag_14",
+    "rate_lag_21",
+    "rate_roll_mean_7",
+    "rate_roll_std_7",
+    "rate_roll_min_7",
+    "rate_roll_max_7",
+    "rate_roll_mean_14",
+    "rate_roll_std_14",
+    "rate_roll_min_14",
+    "rate_roll_max_14",
+    "rate_roll_mean_30",
+    "rate_roll_std_30",
+    "rate_roll_min_30",
+    "rate_roll_max_30",
     "log_return",
 ]
 TARGET_COL = "rate"
@@ -153,3 +179,21 @@ def run(raw_path: Path | str, pair: str = "USD/BRL") -> dict:
         "feature_cols": FEATURE_COLS,
         "pair": pair,
     }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Build and serialize model features.")
+    parser.add_argument("--raw", type=Path, default=Path("data/raw/rates_raw.csv"))
+    parser.add_argument("--pair", default="USD/BRL")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/processed/features_USD_BRL.pkl"),
+    )
+    args = parser.parse_args()
+
+    feature_data = run(args.raw, pair=args.pair)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with args.output.open("wb") as output_file:
+        pickle.dump(feature_data, output_file)
+    logger.info("Features saved to %s", args.output)

@@ -12,6 +12,7 @@ import argparse
 import logging
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 import pandas as pd
 import requests
@@ -35,7 +36,7 @@ SUPPORTED_PAIRS = [
 def _get(url: str, params: dict) -> dict:
     resp = requests.get(url, params=params, timeout=15)
     resp.raise_for_status()
-    return resp.json()
+    return cast(dict[str, Any], resp.json())
 
 
 def fetch_time_series(

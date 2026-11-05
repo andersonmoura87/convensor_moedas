@@ -9,14 +9,7 @@ stages:
 
   # Stage 2: feature engineering (generates processed artefacts used by train)
   features:
-    cmd: python -c "
-      from src.features.engineering import run;
-      import json, pickle, pathlib;
-      result = run('data/raw/rates_raw.csv', pair='USD/BRL');
-      pathlib.Path('data/processed').mkdir(parents=True, exist_ok=True);
-      pickle.dump(result, open('data/processed/features_USD_BRL.pkl', 'wb'));
-      print('Features saved')
-      "
+    cmd: python -m src.features.engineering --raw data/raw/rates_raw.csv --pair USD/BRL --output data/processed/features_USD_BRL.pkl
     deps:
       - src/features/engineering.py
       - data/raw/rates_raw.csv
@@ -25,7 +18,7 @@ stages:
 
   # Stage 3: train the LSTM and register in MLflow
   train:
-    cmd: python -m src.training.train --pair USD/BRL --epochs ${epochs}
+    cmd: python -m src.training.train --pair USD/BRL --epochs ${epochs} --lr ${lr} --hidden-size ${hidden_size} --num-layers ${num_layers} --dropout ${dropout} --seq-len ${seq_len} --features-path data/processed/features_USD_BRL.pkl --metrics-path metrics.json
     params:
       - params.yaml:
           - epochs
@@ -38,7 +31,7 @@ stages:
       - src/training/train.py
       - src/training/model.py
       - src/training/dataset.py
-      - data/raw/rates_raw.csv
+      - data/processed/features_USD_BRL.pkl
     metrics:
       - metrics.json:
           cache: false

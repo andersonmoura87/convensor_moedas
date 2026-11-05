@@ -13,9 +13,12 @@ Responsibilities:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import pickle
+import tempfile
 from pathlib import Path
+from typing import cast
 
 import mlflow
 import mlflow.pytorch
@@ -24,7 +27,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.features.engineering import FEATURE_COLS, run as build_features
+from src.features.engineering import FEATURE_COLS
+from src.features.engineering import run as build_features
 from src.training.dataset import RateSequenceDataset
 from src.training.model import build_model
 
@@ -44,9 +48,6 @@ DEFAULT_CONFIG = {
     "patience": 10,
     "grad_clip": 1.0,
 }
-
-PROCESSED_DIR = Path(__file__).resolve().parents[2] / "data" / "processed"
-MODELS_DIR = Path(__file__).resolve().parents[2] / "mlflow" / "artifacts"
 
 
 def _regression_metrics(
@@ -75,19 +76,34 @@ def evaluate(
         for X_batch, _ in loader:
             X_batch = X_batch.to(device)
             preds.append(model(X_batch).cpu().numpy())
-    return np.concatenate(preds).ravel()
+    return cast(np.ndarray, np.concatenate(preds).ravel())
 
 
 def train(config: dict | None = None) -> str:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
+    features_path = cfg.pop("features_path", None)
+    metrics_path = Path(cfg.pop("metrics_path", "metrics.json"))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    raw_path = Path(__file__).resolve().parents[2] / "data" / "raw" / "rates_raw.csv"
-    if not raw_path.exists():
-        raise FileNotFoundError(f"Raw data not found at {raw_path}. Run ingestion first.")
+    if features_path:
+        feature_path = Path(features_path)
+        if not feature_path.exists():
+            raise FileNotFoundError(f"Processed features not found at {feature_path}.")
+        logger.info("Loading processed features from %s", feature_path)
+        with feature_path.open("rb") as feature_file:
+            feature_data = pickle.load(feature_file)
+        if feature_data.get("pair") != cfg["pair"]:
+            feature_pair = feature_data.get("pair")
+            raise ValueError(
+                f"Feature pair {feature_pair} does not match training pair {cfg['pair']}."
+            )
+    else:
+        raw_path = Path(__file__).resolve().parents[2] / "data" / "raw" / "rates_raw.csv"
+        if not raw_path.exists():
+            raise FileNotFoundError(f"Raw data not found at {raw_path}. Run ingestion first.")
+        logger.info("Building features for pair %s", cfg["pair"])
+        feature_data = build_features(raw_path, pair=cfg["pair"])
 
-    logger.info("Building features for pair %s", cfg["pair"])
-    feature_data = build_features(raw_path, pair=cfg["pair"])
     splits = feature_data["splits"]
     y_scaler = feature_data["y_scaler"]
     x_scaler = feature_data["x_scaler"]
@@ -118,6 +134,7 @@ def train(config: dict | None = None) -> str:
     mlflow.set_experiment("exchange-rate-lstm")
 
     with mlflow.start_run() as run:
+        run_metrics: dict[str, float] = {}
         mlflow.log_params(cfg)
         mlflow.log_param("n_features", len(FEATURE_COLS))
         mlflow.log_param("device", str(device))
@@ -169,34 +186,53 @@ def train(config: dict | None = None) -> str:
         for split_name in ("val", "test"):
             raw_preds_scaled = evaluate(model, loaders[split_name], device)
             raw_preds = y_scaler.inverse_transform(raw_preds_scaled.reshape(-1, 1)).ravel()
-            raw_true_scaled = splits[split_name]["y"][cfg["seq_len"]:]
+            raw_true_scaled = splits[split_name]["y"][cfg["seq_len"] :]
             raw_true = y_scaler.inverse_transform(raw_true_scaled.reshape(-1, 1)).ravel()
             metrics = _regression_metrics(raw_true, raw_preds, split_name)
+            run_metrics.update(metrics)
             mlflow.log_metrics(metrics)
             logger.info("%s metrics: %s", split_name, metrics)
 
-        # Save scalers as artefacts
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        scaler_path = MODELS_DIR / "scalers.pkl"
-        with open(scaler_path, "wb") as f:
-            pickle.dump({"x_scaler": x_scaler, "y_scaler": y_scaler}, f)
-        mlflow.log_artifact(str(scaler_path), artifact_path="scalers")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scaler_path = Path(temp_dir) / "scalers.pkl"
+            with scaler_path.open("wb") as f:
+                pickle.dump(
+                    {
+                        "x_scaler": x_scaler,
+                        "y_scaler": y_scaler,
+                        "seq_len": cfg["seq_len"],
+                    },
+                    f,
+                )
+            mlflow.log_artifact(str(scaler_path), artifact_path="scalers")
 
         # Log model to registry
         signature = mlflow.models.infer_signature(
             splits["train"]["X"][:1],
             np.array([[0.0]]),
         )
-        mlflow.pytorch.log_model(
+        model_info = mlflow.pytorch.log_model(
             model,
             artifact_path="model",
             signature=signature,
             registered_model_name="exchange-rate-lstm",
         )
+        if model_info.registered_model_version is None:
+            raise RuntimeError("MLflow did not return the registered model version.")
 
-        run_id = run.info.run_id
+        client = mlflow.MlflowClient()
+        client.transition_model_version_stage(
+            name="exchange-rate-lstm",
+            version=model_info.registered_model_version,
+            stage="Production",
+            archive_existing_versions=True,
+        )
+
+        run_id = str(run.info.run_id)
         logger.info("MLflow run_id: %s", run_id)
 
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path.write_text(json.dumps(run_metrics, indent=2) + "\n", encoding="utf-8")
     return run_id
 
 
@@ -207,15 +243,23 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden-size", type=int, default=128)
     parser.add_argument("--num-layers", type=int, default=2)
+    parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--seq-len", type=int, default=30)
+    parser.add_argument("--features-path", type=Path)
+    parser.add_argument("--metrics-path", type=Path, default=Path("metrics.json"))
     args = parser.parse_args()
 
-    run_id = train({
-        "pair": args.pair,
-        "epochs": args.epochs,
-        "lr": args.lr,
-        "hidden_size": args.hidden_size,
-        "num_layers": args.num_layers,
-        "seq_len": args.seq_len,
-    })
+    run_id = train(
+        {
+            "pair": args.pair,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "hidden_size": args.hidden_size,
+            "num_layers": args.num_layers,
+            "dropout": args.dropout,
+            "seq_len": args.seq_len,
+            "features_path": args.features_path,
+            "metrics_path": args.metrics_path,
+        }
+    )
     print(f"Training complete. Run ID: {run_id}")

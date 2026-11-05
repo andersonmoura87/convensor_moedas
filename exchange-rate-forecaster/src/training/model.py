@@ -68,7 +68,7 @@ class LSTMForecaster(nn.Module):
         """
         _, (h_n, _) = self.lstm(x)
         # Use the last layer's hidden state
-        out = self.head(h_n[-1])
+        out: torch.Tensor = self.head(h_n[-1])
         return out
 
 

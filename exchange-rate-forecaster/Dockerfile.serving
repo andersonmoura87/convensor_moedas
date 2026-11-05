@@ -22,7 +22,6 @@ RUN pip install --upgrade pip && \
     pip install -r requirements.txt --quiet
 
 COPY src/ ./src/
-COPY mlflow/artifacts/ ./mlflow/artifacts/
 
 EXPOSE ${PORT}
 

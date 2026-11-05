@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -34,7 +35,7 @@ from prometheus_client import (
 )
 from pydantic import BaseModel, Field
 
-from src.serving.predictor import load_model, model_loaded, predict
+from src.serving.predictor import expected_feature_shape, load_model, model_loaded, predict
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -58,7 +59,7 @@ MODEL_LOADED_GAUGE = Gauge("model_loaded", "1 if model is loaded and ready")
 
 # ── Lifecycle ────────────────────────────────────────────────────────────────
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         load_model(TRACKING_URI)
         MODEL_LOADED_GAUGE.set(1)
@@ -81,10 +82,14 @@ class PredictRequest(BaseModel):
     pair: str = Field("USD/BRL", description="Currency pair, e.g. USD/BRL")
     features: list[list[float]] = Field(
         ...,
-        description="Sequence of feature vectors. Shape: (seq_len, n_features).",
+        description="Model sequence length × 25 features; default model shape: (30, 25).",
     )
 
-    model_config = {"json_schema_extra": {"example": {"pair": "USD/BRL", "features": [[0.5] * 25]}}}
+    model_config = {
+        "json_schema_extra": {
+            "example": {"pair": "USD/BRL", "features": [[0.5] * 25 for _ in range(30)]}
+        }
+    }
 
 
 class PredictResponse(BaseModel):
@@ -108,13 +113,26 @@ async def ready() -> dict[str, Any]:
 
 @app.post("/predict", response_model=PredictResponse, tags=["inference"])
 async def predict_endpoint(req: PredictRequest) -> PredictResponse:
+    expected_shape = expected_feature_shape()
+    if len(req.features) != expected_shape[0] or any(
+        len(row) != expected_shape[1] for row in req.features
+    ):
+        received_shape = (len(req.features), tuple(len(row) for row in req.features))
+        raise HTTPException(
+            status_code=422,
+            detail=f"features must have shape {expected_shape}; received {received_shape}",
+        )
+
+    features = np.asarray(req.features, dtype=np.float32)
+    if not np.isfinite(features).all():
+        raise HTTPException(status_code=422, detail="features must contain only finite numbers")
+
     if not model_loaded():
         REQUEST_COUNTER.labels(pair=req.pair, status="error").inc()
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     t0 = time.perf_counter()
     try:
-        features = np.array(req.features, dtype=np.float32)
         rate = predict(features)
         latency = (time.perf_counter() - t0) * 1000
         LATENCY.labels(pair=req.pair).observe(latency / 1000)

@@ -15,6 +15,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ${{ github.repository_owner }}/ml-platform
 
+defaults:
+  run:
+    working-directory: exchange-rate-forecaster
+
 jobs:
   # ── Lint & type-check ───────────────────────────────────────────────────────
   lint:
@@ -27,6 +31,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: exchange-rate-forecaster/requirements-dev.txt
 
       - name: Install dev dependencies
         run: pip install -r requirements-dev.txt
@@ -49,6 +54,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: |
+            exchange-rate-forecaster/requirements.txt
+            exchange-rate-forecaster/requirements-dev.txt
 
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
@@ -59,7 +67,7 @@ jobs:
       - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:
-          file: coverage.xml
+          file: exchange-rate-forecaster/coverage.xml
           fail_ci_if_error: false
 
   # ── Docker build ────────────────────────────────────────────────────────────
@@ -98,8 +106,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: Dockerfile.${{ matrix.service }}
+          context: ./exchange-rate-forecaster
+          file: ./exchange-rate-forecaster/Dockerfile.${{ matrix.service }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
