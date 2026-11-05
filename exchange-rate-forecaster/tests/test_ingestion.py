@@ -8,8 +8,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from src.ingestion.fetch_rates import fetch_time_series, fetch_all_pairs, save_raw
-
+from src.ingestion.fetch_rates import fetch_all_pairs, fetch_time_series, save_raw
 
 MOCK_API_RESPONSE = {
     "base": "USD",
@@ -50,17 +49,20 @@ def test_fetch_all_pairs_returns_all_data(mock_get: MagicMock) -> None:
     assert "rate" in df.columns
 
 
-def test_save_raw_creates_file(tmp_path: "pytest.FixtureRequest") -> None:
+def test_save_raw_creates_file(tmp_path: pytest.FixtureRequest) -> None:
     import src.ingestion.fetch_rates as module
+
     original_raw_dir = module.RAW_DIR
     module.RAW_DIR = tmp_path  # type: ignore[assignment]
 
-    df = pd.DataFrame({
-        "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
-        "base": ["USD", "USD"],
-        "target": ["BRL", "BRL"],
-        "rate": [4.85, 4.87],
-    })
+    df = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+            "base": ["USD", "USD"],
+            "target": ["BRL", "BRL"],
+            "rate": [4.85, 4.87],
+        }
+    )
     path = save_raw(df, filename="test_rates.csv")
     assert path.exists()
     loaded = pd.read_csv(path)

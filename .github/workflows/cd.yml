@@ -1,0 +1,114 @@
+name: CD — Deploy to Linux Server
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: production
+        type: choice
+        options: [production, staging]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/ml-platform
+
+defaults:
+  run:
+    working-directory: exchange-rate-forecaster
+
+jobs:
+  deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'production' }}
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: deploy-${{ inputs.environment || 'production' }}
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Prepare deployment directory
+        run: |
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "mkdir -p ~/ml-platform"
+
+      - name: Copy compose files to server
+        env:
+          IMAGE_TAG: sha-${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          printf 'IMAGE_PREFIX=%s\nIMAGE_TAG=%s\n' \
+            '${{ github.repository_owner }}/ml-platform' "$IMAGE_TAG" > .env.deploy
+          scp docker-compose.yml docker-compose.monitoring.yml .env.deploy \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/ml-platform/
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "mv ~/ml-platform/.env.deploy ~/ml-platform/.env"
+
+      - name: Authenticate server to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | \
+            ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+              "docker login ghcr.io --username '${{ github.actor }}' --password-stdin"
+
+      - name: Copy monitoring configs
+        run: |
+          scp -r monitoring infra \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/ml-platform/
+
+      - name: Deploy on remote server
+        run: |
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
+            set -euo pipefail
+            trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+            cd ~/ml-platform
+
+            # Use the images built and published by CI; the server does not need source files.
+            docker compose pull serving
+
+            docker compose up -d --no-deps --no-build serving
+
+            # Reload monitoring stack
+            docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
+              up -d prometheus grafana loki promtail
+
+            # Wait for the model and its scalers, not only the API process, to be ready.
+            for attempt in $(seq 1 24); do
+              if curl -sf http://localhost/api/v1/ready; then
+                echo "Deployment successful: $(date)"
+                exit 0
+              fi
+              sleep 5
+            done
+
+            echo "Deployment failed: serving did not become ready"
+            docker compose logs --tail=100 serving
+            exit 1
+          ENDSSH
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Deployment failed for ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY

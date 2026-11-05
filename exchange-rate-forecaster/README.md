@@ -141,14 +141,28 @@ dvc repro          # Run full pipeline (fetch → features → train)
 dvc params diff    # Show hyperparameter changes vs last run
 dvc metrics show   # Show tracked metrics
 ```
+The security audit temporarily ignores `PYSEC-2026-2447` in DVC's transitive `diskcache`
+dependency because no fixed version is available. The advisory requires an attacker to be able
+to write to the local cache; restrict access to the DVC cache and remove this exception once an
+upstream fix is available.
 
 ### Model Registry
 The training script automatically registers the best model under `exchange-rate-lstm`.
-Promote to Production via MLflow UI or:
+After registration, training automatically promotes that version to `Production` and archives
+the previous Production version. Serving loads the model and matching scalers from that version.
+The deployment readiness check fails unless both are available. To promote manually via MLflow UI:
 ```python
 from mlflow import MlflowClient
+
 client = MlflowClient()
-client.transition_model_version_stage("exchange-rate-lstm", version=1, stage="Production")
+versions = client.search_model_versions("name='exchange-rate-lstm'")
+latest = max(versions, key=lambda version: int(version.version))
+client.transition_model_version_stage(
+    "exchange-rate-lstm",
+    version=latest.version,
+    stage="Production",
+    archive_existing_versions=True,
+)
 ```
 
 ## API Reference
@@ -157,9 +171,11 @@ client.transition_model_version_stage("exchange-rate-lstm", version=1, stage="Pr
 ```json
 {
   "pair": "USD/BRL",
-  "features": [[...25 values...], ...]  // shape: (30, 25)
+  "features": [[...25 values...], ...]  // default model: 30 rows × 25 features
 }
 ```
+The API validates the exact sequence length configured for the loaded model and requires 25
+features per row.
 Response:
 ```json
 {
@@ -181,8 +197,12 @@ push → lint (ruff + mypy) → tests (pytest, 70% coverage) → docker build �
 
 ### CD Pipeline
 ```
-merge to main → SSH into server → docker compose pull → rolling restart → health check
+merge to main → SSH into server → pull CI images → recreate serving → readiness check
 ```
+
+CI checks and builds from `exchange-rate-forecaster/`. CD copies the Compose and monitoring
+configuration, then pulls the CI-published images; Dockerfiles and source code are not required
+on the server. It verifies `/api/v1/ready` after deployment.
 
 ### Production server setup
 ```bash

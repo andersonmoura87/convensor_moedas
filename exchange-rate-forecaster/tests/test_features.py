@@ -7,15 +7,15 @@ import pandas as pd
 import pytest
 
 from src.features.engineering import (
+    FEATURE_COLS,
     add_calendar_features,
     add_lag_features,
     add_log_return,
     add_rolling_features,
-    build_feature_matrix,
-    train_test_split_temporal,
-    fit_scalers,
     apply_scalers,
-    FEATURE_COLS,
+    build_feature_matrix,
+    fit_scalers,
+    train_test_split_temporal,
 )
 
 
@@ -24,12 +24,14 @@ def sample_df() -> pd.DataFrame:
     """Minimal tidy rate DataFrame for 90 days."""
     dates = pd.date_range("2023-01-01", periods=90, freq="D")
     rng = np.random.default_rng(42)
-    return pd.DataFrame({
-        "date": dates,
-        "base": "USD",
-        "target": "BRL",
-        "rate": 4.8 + rng.normal(0, 0.05, size=90).cumsum(),
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "base": "USD",
+            "target": "BRL",
+            "rate": 4.8 + rng.normal(0, 0.05, size=90).cumsum(),
+        }
+    )
 
 
 def test_add_calendar_features_columns(sample_df: pd.DataFrame) -> None:
