@@ -149,6 +149,7 @@ the previous Production version. Serving loads the model and matching scalers fr
 The deployment readiness check fails unless both are available. To promote manually via MLflow UI:
 ```python
 from mlflow import MlflowClient
+
 client = MlflowClient()
 versions = client.search_model_versions("name='exchange-rate-lstm'")
 latest = max(versions, key=lambda version: int(version.version))
