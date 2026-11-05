@@ -130,4 +130,5 @@ jobs:
         run: pip install pip-audit
 
       - name: Audit dependencies
-        run: pip-audit -r requirements.txt --ignore-vuln GHSA-2wyx-4b3q-8cxk
+        # DVC requires diskcache; no fixed version is published for this advisory.
+        run: pip-audit -r requirements.txt --ignore-vuln GHSA-2wyx-4b3q-8cxk --ignore-vuln PYSEC-2026-2447

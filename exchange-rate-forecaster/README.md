@@ -141,6 +141,10 @@ dvc repro          # Run full pipeline (fetch → features → train)
 dvc params diff    # Show hyperparameter changes vs last run
 dvc metrics show   # Show tracked metrics
 ```
+The security audit temporarily ignores `PYSEC-2026-2447` in DVC's transitive `diskcache`
+dependency because no fixed version is available. The advisory requires an attacker to be able
+to write to the local cache; restrict access to the DVC cache and remove this exception once an
+upstream fix is available.
 
 ### Model Registry
 The training script automatically registers the best model under `exchange-rate-lstm`.
